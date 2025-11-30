@@ -1,0 +1,205 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+             request.auth.token.admin == true;
+    }
+    
+    function isGodMode() {
+      return isAuthenticated() && 
+             request.auth.token.godMode == true;
+    }
+    
+    function hasPermission(permission) {
+      return isGodMode() || 
+             (isAdmin() && request.auth.token.permissions.hasAny([permission, '*']));
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      // Read: Own profile, or admin/god mode
+      allow read: if isOwner(userId) || isAdmin();
+      
+      // Create: Anyone authenticated (onUserCreate trigger will set admin)
+      allow create: if isAuthenticated() && 
+                       request.resource.data.keys().hasAll(['email', 'displayName', 'createdAt']) &&
+                       request.resource.data.email == request.auth.token.email;
+      
+      // Update: Own profile, or admin/god mode
+      allow update: if isOwner(userId) || isAdmin();
+      
+      // Delete: Only god mode
+      allow delete: if isGodMode();
+    }
+    
+    // Conversations collection
+    match /conversations/{conversationId} {
+      // Read: Member of conversation, or admin
+      allow read: if isAuthenticated() && 
+                     (resource.data.participants.hasAny([request.auth.uid]) || isAdmin());
+      
+      // Create: Authenticated users
+      allow create: if isAuthenticated() && 
+                       request.resource.data.participants.hasAny([request.auth.uid]);
+      
+      // Update: Member of conversation, or admin
+      allow update: if isAuthenticated() && 
+                       (resource.data.participants.hasAny([request.auth.uid]) || isAdmin());
+      
+      // Delete: Only admin/god mode
+      allow delete: if isAdmin();
+    }
+    
+    // Messages collection
+    match /conversations/{conversationId}/messages/{messageId} {
+      // Read: Member of conversation, or admin/god mode (god mode can read all)
+      allow read: if isAuthenticated() && 
+                     (get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants.hasAny([request.auth.uid]) || 
+                      isAdmin());
+      
+      // Create: Member of conversation
+      allow create: if isAuthenticated() && 
+                       get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants.hasAny([request.auth.uid]) &&
+                       request.resource.data.senderId == request.auth.uid;
+      
+      // Update: Sender, or admin
+      allow update: if isAuthenticated() && 
+                       (resource.data.senderId == request.auth.uid || isAdmin());
+      
+      // Delete: Sender (within 2 hours), or admin
+      allow delete: if isAuthenticated() && 
+                       (resource.data.senderId == request.auth.uid || isAdmin());
+    }
+    
+    // Groups collection
+    match /groups/{groupId} {
+      // Read: Member, or public group, or admin
+      allow read: if isAuthenticated() && 
+                     (resource.data.privacy == 'public' || 
+                      resource.data.members.hasAny([request.auth.uid]) || 
+                      isAdmin());
+      
+      // Create: Authenticated users
+      allow create: if isAuthenticated() && 
+                       request.resource.data.ownerId == request.auth.uid;
+      
+      // Update: Owner, admin, or group admin
+      allow update: if isAuthenticated() && 
+                        (resource.data.ownerId == request.auth.uid || 
+                         resource.data.admins.hasAny([request.auth.uid]) || 
+                         isAdmin());
+      
+      // Delete: Owner or god mode
+      allow delete: if isAuthenticated() && 
+                       (resource.data.ownerId == request.auth.uid || isGodMode());
+    }
+    
+    // Stories collection
+    match /stories/{storyId} {
+      // Read: Public, or friends, or admin
+      allow read: if isAuthenticated() && 
+                     (resource.data.privacy == 'public' || 
+                      resource.data.userId == request.auth.uid ||
+                      isAdmin());
+      
+      // Create: Authenticated users
+      allow create: if isAuthenticated() && 
+                       request.resource.data.userId == request.auth.uid;
+      
+      // Update: Owner only
+      allow update: if isAuthenticated() && 
+                       resource.data.userId == request.auth.uid;
+      
+      // Delete: Owner or admin (auto-delete after 24h via scheduled function)
+      allow delete: if isAuthenticated() && 
+                        (resource.data.userId == request.auth.uid || isAdmin());
+    }
+    
+    // Friends collection
+    match /friends/{friendId} {
+      // Read: Own friend requests, or admin
+      allow read: if isAuthenticated() && 
+                     (resource.data.userId == request.auth.uid || 
+                      resource.data.friendId == request.auth.uid ||
+                      isAdmin());
+      
+      // Create: Authenticated users
+      allow create: if isAuthenticated();
+      
+      // Update: Participants or admin
+      allow update: if isAuthenticated() && 
+                       (resource.data.userId == request.auth.uid || 
+                        resource.data.friendId == request.auth.uid ||
+                        isAdmin());
+      
+      // Delete: Participants or admin
+      allow delete: if isAuthenticated() && 
+                       (resource.data.userId == request.auth.uid || 
+                        resource.data.friendId == request.auth.uid ||
+                        isAdmin());
+    }
+    
+    // Reports collection (Moderation)
+    match /reports/{reportId} {
+      // Read: Only admin/god mode
+      allow read: if isAdmin();
+      
+      // Create: Authenticated users can report
+      allow create: if isAuthenticated();
+      
+      // Update: Only admin
+      allow update: if isAdmin();
+      
+      // Delete: Only god mode
+      allow delete: if isGodMode();
+    }
+    
+    // Admin logs (Audit trail)
+    match /admin_logs/{logId} {
+      // Read: Only admin/god mode
+      allow read: if isAdmin();
+      
+      // Create: Only via Cloud Functions (server-side)
+      allow create: if false;
+      
+      // Update: Only via Cloud Functions
+      allow update: if false;
+      
+      // Delete: Only god mode
+      allow delete: if isGodMode();
+    }
+    
+    // System config (Feature flags, etc.)
+    match /system/{configId} {
+      // Read: Only admin
+      allow read: if isAdmin();
+      
+      // Write: Only god mode
+      allow write: if isGodMode();
+    }
+    
+    // Analytics collection (Read-only for admins)
+    match /analytics/{docId} {
+      allow read: if isAdmin();
+      allow write: if false; // Only via Cloud Functions
+    }
+    
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+

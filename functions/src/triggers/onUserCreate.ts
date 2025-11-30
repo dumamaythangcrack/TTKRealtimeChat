@@ -1,0 +1,100 @@
+/**
+ * CRITICAL: Auto Admin Grant Trigger
+ * Tự động cấp quyền ADMIN cho email khangnek705@gmail.com khi đăng ký
+ */
+
+import { onDocumentCreated } from 'firebase-functions/v2/firestore';
+import { getAuth } from 'firebase-admin/auth';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { logAdminAction } from '../utils/firestore';
+import { grantAdminPrivileges } from '../utils/auth';
+import { sendWelcomeEmail } from '../utils/email';
+
+const auth = getAuth();
+const db = getFirestore();
+
+// SUPER ADMIN EMAIL - HARDCODED
+const SUPER_ADMIN_EMAIL = 'khangnek705@gmail.com';
+
+export const onUserCreate = onDocumentCreated(
+  'users/{userId}',
+  async (event) => {
+    const userId = event.data?.id;
+    const userData = event.data?.data();
+
+    if (!userId || !userData) {
+      console.error('Invalid user data');
+      return;
+    }
+
+    const email = userData.email as string;
+    const displayName = userData.displayName as string;
+
+    console.log(`New user created: ${userId}, email: ${email}`);
+
+    try {
+      // CRITICAL: Check if this is the super admin email
+      if (email === SUPER_ADMIN_EMAIL) {
+        console.log(`🚨 SUPER ADMIN DETECTED: ${email}`);
+        console.log(`Granting GOD MODE privileges to ${userId}`);
+
+        // Grant admin privileges with GOD MODE
+        await grantAdminPrivileges(userId, true); // isGodMode = true
+
+        // Update Firestore user document with admin flags
+        await db.collection('users').doc(userId).update({
+          isAdmin: true,
+          godMode: true,
+          role: 'owner',
+          permissions: ['*'],
+          adminGrantedAt: FieldValue.serverTimestamp(),
+          adminGrantedBy: 'system',
+        });
+
+        // Log admin action
+        await logAdminAction(userId, 'auto_admin_grant', {
+          email,
+          reason: 'super_admin_email_match',
+          godMode: true,
+        });
+
+        console.log(`✅ GOD MODE granted to ${email}`);
+      } else {
+        // Regular user - ensure admin flags are false
+        await db.collection('users').doc(userId).update({
+          isAdmin: false,
+          godMode: false,
+          role: 'user',
+          permissions: [],
+        });
+      }
+
+      // Send welcome email
+      try {
+        await sendWelcomeEmail(email, displayName);
+      } catch (emailError) {
+        console.error('Error sending welcome email:', emailError);
+        // Don't throw - email failure shouldn't break user creation
+      }
+
+      // Initialize user stats
+      await db.collection('users').doc(userId).update({
+        stats: {
+          messagesSent: 0,
+          callsMade: 0,
+          storiesCreated: 0,
+          friendsCount: 0,
+          coins: 0,
+          level: 1,
+          xp: 0,
+        },
+      });
+
+      console.log(`User setup completed for ${userId}`);
+    } catch (error) {
+      console.error('Error in onUserCreate:', error);
+      // Don't throw - we don't want to break user creation
+    }
+  }
+);
+

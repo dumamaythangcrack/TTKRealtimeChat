@@ -1,0 +1,37 @@
+{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null",
+    
+    "presence": {
+      "$uid": {
+        ".read": "$uid === auth.uid || root.child('users').child(auth.uid).child('isAdmin').val() === true",
+        ".write": "$uid === auth.uid"
+      }
+    },
+    
+    "typing": {
+      "$conversationId": {
+        "$uid": {
+          ".read": "auth != null",
+          ".write": "$uid === auth.uid"
+        }
+      }
+    },
+    
+    "calls": {
+      "$callId": {
+        ".read": "auth != null && (data.child('participants').hasChild(auth.uid) || root.child('users').child(auth.uid).child('isAdmin').val() === true)",
+        ".write": "auth != null && (data.child('participants').hasChild(auth.uid) || root.child('users').child(auth.uid).child('isAdmin').val() === true)"
+      }
+    },
+    
+    "livestreams": {
+      "$streamId": {
+        ".read": "auth != null",
+        ".write": "auth != null && (data.child('hostId').val() === auth.uid || root.child('users').child(auth.uid).child('isAdmin').val() === true)"
+      }
+    }
+  }
+}
+
